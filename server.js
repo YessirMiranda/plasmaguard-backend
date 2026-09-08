@@ -12,16 +12,23 @@ const SUPABASE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZ
 // Ruta para leer el último registro
 app.get('/api/ultimo', async (req, res) => {
   try {
-    const response = await axios.get(SUPABASE_URL + "registros?select=*&order=created_at.desc&limit=1", {
+    const url = SUPABASE_URL + "registros?select=*&order=created_at.desc&limit=1";
+    console.log("Consultando URL:", url); // Para depurar
+
+    const response = await axios.get(url, {
       headers: {
         "apikey": SUPABASE_KEY,
-        "Authorization": "Bearer " + SUPABASE_KEY
+        "Authorization": "Bearer " + SUPABASE_KEY,
+        "Accept": "application/json"
       }
     });
     res.json(response.data);
   } catch (error) {
-    console.error("Error al obtener datos:", error.message); // Mostrar en logs de Render
-    res.status(500).json({ error: "Error al obtener datos", detalle: error.message });
+    console.error("Error detallado:", error.response ? error.response.data : error.message);
+    res.status(500).json({ 
+      error: "Error al obtener datos", 
+      detalle: error.response ? error.response.data : error.message 
+    });
   }
 });
 
