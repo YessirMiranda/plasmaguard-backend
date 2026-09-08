@@ -20,7 +20,8 @@ app.get('/api/ultimo', async (req, res) => {
     });
     res.json(response.data);
   } catch (error) {
-    res.status(500).json({ error: "Error al obtener datos" });
+    console.error("Error al obtener datos:", error.message); // Mostrar en logs de Render
+    res.status(500).json({ error: "Error al obtener datos", detalle: error.message });
   }
 });
 
