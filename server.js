@@ -165,3 +165,14 @@ app.post('/api/usuarios', async (req, res) => {
 
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => console.log("Servidor en puerto " + PORT));
+
+// ==================== RUTA: BORRAR FALLAS ====================
+app.delete('/api/fallas/borrar', async (req, res) => {
+  try {
+    // Borrar todas las fallas (en producción, filtrar por fecha)
+    await axios.delete(SUPABASE_URL + "registros?created_at=lt.2000-01-01", { headers });
+    res.json({ success: true, mensaje: "Notificaciones borradas" });
+  } catch (error) {
+    res.status(500).json({ error: "Error al borrar notificaciones" });
+  }
+});
