@@ -164,6 +164,23 @@ app.post('/api/usuarios', async (req, res) => {
 });
 
 const PORT = process.env.PORT || 3000;
+
+// ==================== RUTA: BORRAR FALLAS ====================
+app.delete('/api/fallas/borrar', async (req, res) => {
+  try {
+    // Borrar todas las fallas de la tabla 'registros'
+    // En producción, deberías borrar solo las fallas antiguas o las seleccionadas
+    const response = await axios.delete(SUPABASE_URL + "registros?estado_ac=eq.false", { headers });
+    
+    // También borrar las fallas de temperatura
+    // (Esto es un ejemplo, en producción se debe filtrar mejor)
+    
+    res.json({ success: true, mensaje: "Notificaciones borradas" });
+  } catch (error) {
+    console.error("Error borrando notificaciones:", error.message);
+    res.status(500).json({ error: "Error al borrar notificaciones", detalle: error.message });
+  }
+});
 app.listen(PORT, () => console.log("Servidor en puerto " + PORT));
 
 // ==================== RUTA: BORRAR FALLAS ====================
