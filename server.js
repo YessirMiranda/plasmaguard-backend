@@ -12,34 +12,23 @@ const SUPABASE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZ
 // Ruta para leer el último registro
 app.get('/api/ultimo', async (req, res) => {
   try {
-    const url = SUPABASE_URL + "registros?select=*&order=created_at.desc&limit=1";
-    console.log("Consultando URL:", url); // Para depurar
-
-    const response = await axios.get(url, {
-      headers: {
-        "apikey": SUPABASE_KEY,
-        "Authorization": "Bearer " + SUPABASE_KEY,
-        "Accept": "application/json"
-      }
+    const response = await axios.get(SUPABASE_URL + "registros?select=*&order=id.desc&limit=1", {
+      headers: { "apikey": SUPABASE_KEY, "Authorization": "Bearer " + SUPABASE_KEY }
     });
     res.json(response.data);
   } catch (error) {
-    console.error("Error detallado:", error.response ? error.response.data : error.message);
-    res.status(500).json({ 
-      error: "Error al obtener datos", 
-      detalle: error.response ? error.response.data : error.message 
-    });
+    res.status(500).json({ error: "Error al obtener datos" });
   }
 });
 
-// Ruta para insertar un comando
+// Ruta para insertar un comando (con valor opcional)
 app.post('/api/comando', async (req, res) => {
-  const { comando } = req.body;
+  const { comando, valor } = req.body;
   try {
-    const response = await axios.post(SUPABASE_URL + "comandos", {
+    await axios.post(SUPABASE_URL + "comandos", {
       dispositivo_id: "POTOSI",
       comando: comando,
-      valor: null,
+      valor: valor || null,
       estado: "pendiente"
     }, {
       headers: {
@@ -48,13 +37,11 @@ app.post('/api/comando', async (req, res) => {
         "Content-Type": "application/json"
       }
     });
-    res.json({ success: true, data: response.data });
+    res.json({ success: true });
   } catch (error) {
     res.status(500).json({ error: "Error al enviar comando" });
   }
 });
 
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => {
-  console.log("Servidor escuchando en puerto " + PORT);
-});
+app.listen(PORT, () => console.log("Servidor en puerto " + PORT));
