@@ -193,3 +193,72 @@ app.delete('/api/fallas/borrar', async (req, res) => {
     res.status(500).json({ error: "Error al borrar notificaciones" });
   }
 });
+
+// ==================== RUTA: USUARIOS ====================
+app.get('/api/usuarios', async (req, res) => {
+  try {
+    const { rol } = req.query;
+    let url = SUPABASE_URL + "usuarios?select=*";
+    if (rol) url += `&rol=eq.${rol}`;
+    const response = await axios.get(url, { headers });
+    res.json(response.data);
+  } catch (error) {
+    res.status(500).json({ error: "Error al obtener usuarios" });
+  }
+});
+
+app.delete('/api/usuarios/:id', async (req, res) => {
+  try {
+    const { id } = req.params;
+    await axios.delete(`${SUPABASE_URL}usuarios?id=eq.${id}`, { headers });
+    res.json({ success: true });
+  } catch (error) {
+    res.status(500).json({ error: "Error al eliminar usuario" });
+  }
+});
+
+// ==================== RUTA: AUDITORÍA ====================
+app.get('/api/auditoria', async (req, res) => {
+  try {
+    const response = await axios.get(SUPABASE_URL + "auditoria?select=*&order=created_at.desc&limit=100", { headers });
+    res.json(response.data);
+  } catch (error) {
+    res.status(500).json({ error: "Error al obtener auditoría" });
+  }
+});
+
+app.post('/api/auditoria', async (req, res) => {
+  const { usuario, accion, detalles } = req.body;
+  try {
+    await axios.post(SUPABASE_URL + "auditoria", { usuario, accion, detalles }, { headers });
+    res.json({ success: true });
+  } catch (error) {
+    res.status(500).json({ error: "Error al guardar auditoría" });
+  }
+});
+
+// ==================== RUTA: DATOS INDIVIDUALES ====================
+app.delete('/api/datos/:id', async (req, res) => {
+  try {
+    const { id } = req.params;
+    await axios.delete(`${SUPABASE_URL}registros?id=eq.${id}`, { headers });
+    res.json({ success: true });
+  } catch (error) {
+    res.status(500).json({ error: "Error al eliminar dato" });
+  }
+});
+
+// ==================== RUTA: CONFIGURACIÓN AUTOBORRADO ====================
+app.post('/api/config/autoborrado', async (req, res) => {
+  const { frecuencia, dias } = req.body;
+  try {
+    // Guardar en una tabla de configuración
+    await axios.post(SUPABASE_URL + "configuracion", {
+      clave: 'autoborrado',
+      valor: JSON.stringify({ frecuencia, dias })
+    }, { headers });
+    res.json({ success: true });
+  } catch (error) {
+    res.status(500).json({ error: "Error al guardar configuración" });
+  }
+});
