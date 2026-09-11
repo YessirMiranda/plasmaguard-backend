@@ -314,22 +314,18 @@ async function verificarYNotificar() {
       
       if (notifResp.data.length > 0) return; // Ya se notificó recientemente
 
-      // Enviar notificación
-      const destinatarios = config.messenger_destinatarios.split(',').map(d => d.trim()).filter(d => d);
+      // Enviar notificación (solo con API Key)
+      const enviado = await enviarNotificacionMessenger(config.messenger_apikey, falla.mensaje);
       
-      for (const dest of destinatarios) {
-        const enviado = await enviarNotificacionMessenger(config.messenger_apikey, falla.mensaje, dest);
-        
-        // Guardar en tabla notificaciones
-        await axios.post(SUPABASE_URL + "notificaciones", {
-          dispositivo_id: d.dispositivo_id,
-          tipo: falla.tipo,
-          mensaje: falla.mensaje,
-          destinatario: dest,
-          canal: 'messenger',
-          estado: enviado ? 'enviado' : 'fallido'
-        }, { headers });
-      }
+      // Guardar en tabla notificaciones
+      await axios.post(SUPABASE_URL + "notificaciones", {
+        dispositivo_id: d.dispositivo_id,
+        tipo: falla.tipo,
+        mensaje: falla.mensaje,
+        destinatario: 'Messenger',
+        canal: 'messenger',
+        estado: enviado ? 'enviado' : 'fallido'
+      }, { headers });
     }
   } catch (error) {
     console.error("Error en verificación de notificaciones:", error.message);
@@ -379,13 +375,13 @@ app.post('/api/notificaciones/probar', async (req, res) => {
     }
 
     const mensaje = "🧪 PRUEBA DE NOTIFICACIÓN - PlasmaGuard funcionando correctamente.";
-    const destinatarios = config.messenger_destinatarios.split(',').map(d => d.trim()).filter(d => d);
+    const enviado = await enviarNotificacionMessenger(config.messenger_apikey, mensaje);
     
-    for (const dest of destinatarios) {
-      await enviarNotificacionMessenger(config.messenger_apikey, mensaje, dest);
+    if (enviado) {
+      res.json({ success: true, mensaje: "Notificación enviada" });
+    } else {
+      res.status(500).json({ error: "Error al enviar notificación" });
     }
-    
-    res.json({ success: true });
   } catch (error) {
     res.status(500).json({ error: "Error al enviar notificación" });
   }
