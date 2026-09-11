@@ -338,3 +338,55 @@ async function verificarYNotificar() {
 
 // Ejecutar cada 60 segundos
 setInterval(verificarYNotificar, 60000);
+
+// ==================== RUTA: CONFIGURACIÓN ====================
+app.get('/api/configuracion', async (req, res) => {
+  try {
+    const response = await axios.get(SUPABASE_URL + "configuracion?select=*", { headers });
+    res.json(response.data);
+  } catch (error) {
+    res.status(500).json({ error: "Error al obtener configuración" });
+  }
+});
+
+app.post('/api/configuracion', async (req, res) => {
+  try {
+    const config = req.body;
+    for (const [clave, valor] of Object.entries(config)) {
+      // Verificar si existe
+      const existe = await axios.get(SUPABASE_URL + `configuracion?clave=eq.${clave}`, { headers });
+      if (existe.data.length > 0) {
+        await axios.patch(SUPABASE_URL + `configuracion?clave=eq.${clave}`, { valor }, { headers });
+      } else {
+        await axios.post(SUPABASE_URL + "configuracion", { clave, valor, descripcion: '' }, { headers });
+      }
+    }
+    res.json({ success: true });
+  } catch (error) {
+    res.status(500).json({ error: "Error al guardar configuración" });
+  }
+});
+
+// ==================== RUTA: PROBAR NOTIFICACIÓN ====================
+app.post('/api/notificaciones/probar', async (req, res) => {
+  try {
+    const configResp = await axios.get(SUPABASE_URL + "configuracion?select=*", { headers });
+    const config = {};
+    configResp.data.forEach(c => { config[c.clave] = c.valor; });
+    
+    if (!config.messenger_apikey) {
+      return res.status(400).json({ error: "No hay API Key configurada" });
+    }
+
+    const mensaje = "🧪 PRUEBA DE NOTIFICACIÓN - PlasmaGuard funcionando correctamente.";
+    const destinatarios = config.messenger_destinatarios.split(',').map(d => d.trim()).filter(d => d);
+    
+    for (const dest of destinatarios) {
+      await enviarNotificacionMessenger(config.messenger_apikey, mensaje, dest);
+    }
+    
+    res.json({ success: true });
+  } catch (error) {
+    res.status(500).json({ error: "Error al enviar notificación" });
+  }
+});
