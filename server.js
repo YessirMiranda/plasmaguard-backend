@@ -37,49 +37,97 @@ async function enviarNotificacionMessenger(apiKey, mensaje) {
 }
 
 async function verificarYNotificar() {
+  console.log("🔍 [NOTIF] Iniciando verificación...");
+  
   try {
+    // Leer configuración
     const configResp = await axios.get(SUPABASE_URL + "configuracion?select=*", { headers });
     const config = {};
     configResp.data.forEach(c => { config[c.clave] = c.valor; });
 
-    if (config.notificaciones_activas !== 'true') return;
-    if (!config.messenger_apikey) return;
+    console.log("🔍 [NOTIF] Configuración:", {
+      notificaciones_activas: config.notificaciones_activas,
+      messenger_apikey: config.messenger_apikey ? '***' + config.messenger_apikey.slice(-4) : 'NO CONFIGURADA',
+      temp_maxima: config.temp_maxima,
+      temp_minima: config.temp_minima,
+      voltaje_corte: config.voltaje_corte
+    });
 
+    // Si las notificaciones están desactivadas, salir
+    if (config.notificaciones_activas !== 'true') {
+      console.log("🔍 [NOTIF] Notificaciones desactivadas. Saliendo.");
+      return;
+    }
+    if (!config.messenger_apikey) {
+      console.log("🔍 [NOTIF] No hay API Key configurada. Saliendo.");
+      return;
+    }
+
+    // Leer último registro
     const resp = await axios.get(SUPABASE_URL + "registros?select=*&order=id.desc&limit=1", { headers });
-    if (resp.data.length === 0) return;
+    if (resp.data.length === 0) {
+      console.log("🔍 [NOTIF] No hay registros. Saliendo.");
+      return;
+    }
 
     const d = resp.data[0];
+    console.log("🔍 [NOTIF] Último registro:", {
+      id: d.id,
+      sensor_1: d.sensor_1,
+      sensor_2: d.sensor_2,
+      estado_ac: d.estado_ac,
+      voltaje_bateria: d.voltaje_bateria
+    });
+
     let falla = null;
 
+    // Detectar fallas
     if (!d.estado_ac) {
       falla = { tipo: 'apagon', mensaje: '⚡ APAGÓN detectado en el banco de sangre. El sistema está en modo batería.' };
+      console.log("🔍 [NOTIF] Falla detectada: APAGÓN");
     } else if (d.sensor_1 !== -127 && (d.sensor_1 > parseFloat(config.temp_maxima) || d.sensor_1 < parseFloat(config.temp_minima))) {
       falla = { tipo: 'temp_alta', mensaje: `🌡️ ALERTA: Temperatura anormal en Sensor 1: ${d.sensor_1.toFixed(1)}°C` };
+      console.log("🔍 [NOTIF] Falla detectada: TEMP ALTA S1");
     } else if (d.sensor_2 !== -127 && (d.sensor_2 > parseFloat(config.temp_maxima) || d.sensor_2 < parseFloat(config.temp_minima))) {
       falla = { tipo: 'temp_alta', mensaje: `🌡️ ALERTA: Temperatura anormal en Sensor 2: ${d.sensor_2.toFixed(1)}°C` };
+      console.log("🔍 [NOTIF] Falla detectada: TEMP ALTA S2");
     } else if (d.voltaje_bateria <= parseFloat(config.voltaje_corte)) {
       falla = { tipo: 'bateria_baja', mensaje: `🔋 ALERTA: Batería baja. Voltaje: ${d.voltaje_bateria.toFixed(2)}V` };
+      console.log("🔍 [NOTIF] Falla detectada: BATERÍA BAJA");
     }
 
     if (falla) {
+      // Verificar si ya se notificó esta falla en los últimos 5 minutos
       const cincoMinAtras = new Date(Date.now() - 5 * 60 * 1000).toISOString();
       const notifResp = await axios.get(SUPABASE_URL + `notificaciones?tipo=eq.${falla.tipo}&created_at=gte.${cincoMinAtras}`, { headers });
       
-      if (notifResp.data.length > 0) return;
+      if (notifResp.data.length > 0) {
+        console.log("🔍 [NOTIF] Ya se notificó esta falla recientemente. Saliendo.");
+        return;
+      }
 
+      console.log("🔍 [NOTIF] Enviando notificación:", falla.mensaje);
       const enviado = await enviarNotificacionMessenger(config.messenger_apikey, falla.mensaje);
       
-      await axios.post(SUPABASE_URL + "notificaciones", {
-        dispositivo_id: d.dispositivo_id,
-        tipo: falla.tipo,
-        mensaje: falla.mensaje,
-        destinatario: 'Messenger',
-        canal: 'messenger',
-        estado: enviado ? 'enviado' : 'fallido'
-      }, { headers });
+      // Guardar en tabla notificaciones
+      try {
+        await axios.post(SUPABASE_URL + "notificaciones", {
+          dispositivo_id: d.dispositivo_id,
+          tipo: falla.tipo,
+          mensaje: falla.mensaje,
+          destinatario: 'Messenger',
+          canal: 'messenger',
+          estado: enviado ? 'enviado' : 'fallido'
+        }, { headers });
+        console.log("🔍 [NOTIF] Notificación guardada en Supabase.");
+      } catch (err) {
+        console.error("🔍 [NOTIF] Error guardando notificación:", err.message);
+      }
+    } else {
+      console.log("🔍 [NOTIF] No se detectaron fallas.");
     }
   } catch (error) {
-    console.error("Error en verificación de notificaciones:", error.message);
+    console.error("🔍 [NOTIF] Error general:", error.message);
   }
 }
 
@@ -360,6 +408,14 @@ app.post('/api/config/autoborrado', async (req, res) => {
 // ==================== INICIAR SERVIDOR ====================
 const PORT = process.env.PORT || 3000;
 
-setInterval(verificarYNotificar, 60000);
+// Ejecutar inmediatamente al iniciar
+console.log("🔍 [NOTIF] Iniciando sistema de notificaciones...");
+verificarYNotificar();
+
+// Luego cada 60 segundos
+setInterval(() => {
+  console.log("🔍 [NOTIF] Ejecutando verificación periódica...");
+  verificarYNotificar();
+}, 60000);
 
 app.listen(PORT, () => console.log("Servidor en puerto " + PORT));
