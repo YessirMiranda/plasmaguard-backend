@@ -268,9 +268,14 @@ const axios = require('axios');
 
 async function enviarNotificacionMessenger(apiKey, mensaje) {
   try {
-    const url = `https://api.callmebot.com/facebook/send.php?apikey=${apiKey}&text=${encodeURIComponent(mensaje)}`;
-    await axios.get(url);
-    console.log("Notificación enviada a Messenger");
+    // Limpiar la API Key: eliminar espacios, saltos de línea y caracteres invisibles
+    const apiKeyLimpia = apiKey.trim().replace(/[\s\u200B\u200C\u200D\uFEFF]/g, '');
+    
+    const url = `https://api.callmebot.com/facebook/send.php?apikey=${apiKeyLimpia}&text=${encodeURIComponent(mensaje)}`;
+    console.log("URL de notificación:", url); // Para depurar
+    
+    const response = await axios.get(url);
+    console.log("Respuesta de CallMeBot:", response.data);
     return true;
   } catch (error) {
     console.error("Error enviando notificación:", error.message);
