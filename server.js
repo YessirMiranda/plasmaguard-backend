@@ -262,3 +262,79 @@ app.post('/api/config/autoborrado', async (req, res) => {
     res.status(500).json({ error: "Error al guardar configuración" });
   }
 });
+
+// ==================== NOTIFICACIONES AUTOMÁTICAS ====================
+const axios = require('axios');
+
+async function enviarNotificacionMessenger(apiKey, mensaje, destinatario) {
+  try {
+    const url = `https://api.callmebot.com/facebook/send.php?apikey=${apiKey}&text=${encodeURIComponent(mensaje)}`;
+    await axios.get(url);
+    console.log("Notificación enviada a Messenger:", destinatario);
+    return true;
+  } catch (error) {
+    console.error("Error enviando notificación:", error.message);
+    return false;
+  }
+}
+
+async function verificarYNotificar() {
+  try {
+    // Leer configuración
+    const configResp = await axios.get(SUPABASE_URL + "configuracion?select=*", { headers });
+    const config = {};
+    configResp.data.forEach(c => { config[c.clave] = c.valor; });
+
+    // Si las notificaciones están desactivadas, salir
+    if (config.notificaciones_activas !== 'true') return;
+    if (!config.messenger_apikey) return;
+
+    // Leer último registro
+    const resp = await axios.get(SUPABASE_URL + "registros?select=*&order=id.desc&limit=1", { headers });
+    if (resp.data.length === 0) return;
+
+    const d = resp.data[0];
+    let falla = null;
+
+    // Detectar fallas
+    if (!d.estado_ac) {
+      falla = { tipo: 'apagon', mensaje: '⚡ APAGÓN detectado en el banco de sangre. El sistema está en modo batería.' };
+    } else if (d.sensor_1 !== -127 && (d.sensor_1 > parseFloat(config.temp_maxima) || d.sensor_1 < parseFloat(config.temp_minima))) {
+      falla = { tipo: 'temp_alta', mensaje: `🌡️ ALERTA: Temperatura anormal en Sensor 1: ${d.sensor_1.toFixed(1)}°C` };
+    } else if (d.sensor_2 !== -127 && (d.sensor_2 > parseFloat(config.temp_maxima) || d.sensor_2 < parseFloat(config.temp_minima))) {
+      falla = { tipo: 'temp_alta', mensaje: `🌡️ ALERTA: Temperatura anormal en Sensor 2: ${d.sensor_2.toFixed(1)}°C` };
+    } else if (d.voltaje_bateria <= parseFloat(config.voltaje_corte)) {
+      falla = { tipo: 'bateria_baja', mensaje: `🔋 ALERTA: Batería baja. Voltaje: ${d.voltaje_bateria.toFixed(2)}V` };
+    }
+
+    if (falla) {
+      // Verificar si ya se notificó esta falla en los últimos 5 minutos
+      const cincoMinAtras = new Date(Date.now() - 5 * 60 * 1000).toISOString();
+      const notifResp = await axios.get(SUPABASE_URL + `notificaciones?tipo=eq.${falla.tipo}&created_at=gte.${cincoMinAtras}`, { headers });
+      
+      if (notifResp.data.length > 0) return; // Ya se notificó recientemente
+
+      // Enviar notificación
+      const destinatarios = config.messenger_destinatarios.split(',').map(d => d.trim()).filter(d => d);
+      
+      for (const dest of destinatarios) {
+        const enviado = await enviarNotificacionMessenger(config.messenger_apikey, falla.mensaje, dest);
+        
+        // Guardar en tabla notificaciones
+        await axios.post(SUPABASE_URL + "notificaciones", {
+          dispositivo_id: d.dispositivo_id,
+          tipo: falla.tipo,
+          mensaje: falla.mensaje,
+          destinatario: dest,
+          canal: 'messenger',
+          estado: enviado ? 'enviado' : 'fallido'
+        }, { headers });
+      }
+    }
+  } catch (error) {
+    console.error("Error en verificación de notificaciones:", error.message);
+  }
+}
+
+// Ejecutar cada 60 segundos
+setInterval(verificarYNotificar, 60000);
