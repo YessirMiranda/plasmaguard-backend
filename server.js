@@ -429,6 +429,22 @@ app.post('/api/config/autoborrado', async (req, res) => {
   }
 });
 
+// --- Cambiar WiFi ---
+app.post('/api/comando/wifi', async (req, res) => {
+  const { ssid1, pass1, ssid2, pass2 } = req.body;
+  try {
+    const valor = `${ssid1},${pass1},${ssid2 || ''},${pass2 || ''}`;
+    await axios.post(SUPABASE_URL + "comandos", {
+      dispositivo_id: "POTOSI",
+      comando: "set_wifi",
+      valor: valor,
+      estado: "pendiente"
+    }, { headers });
+    res.json({ success: true });
+  } catch (error) {
+    res.status(500).json({ error: "Error al enviar comando WiFi" });
+  }
+});
 // ==================== INICIAR SERVIDOR ====================
 const PORT = process.env.PORT || 3000;
 
