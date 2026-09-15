@@ -47,19 +47,13 @@ async function verificarYNotificar() {
 
     console.log("🔍 [NOTIF] Configuración:", {
       notificaciones_activas: config.notificaciones_activas,
-      messenger_apikey: config.messenger_apikey ? '***' + config.messenger_apikey.slice(-4) : 'NO CONFIGURADA',
       temp_maxima: config.temp_maxima,
       temp_minima: config.temp_minima,
       voltaje_corte: config.voltaje_corte
     });
 
-    // Si las notificaciones están desactivadas, salir
     if (config.notificaciones_activas !== 'true') {
       console.log("🔍 [NOTIF] Notificaciones desactivadas. Saliendo.");
-      return;
-    }
-    if (!config.messenger_apikey) {
-      console.log("🔍 [NOTIF] No hay API Key configurada. Saliendo.");
       return;
     }
 
@@ -71,6 +65,17 @@ async function verificarYNotificar() {
     }
 
     const d = resp.data[0];
+
+    // VERIFICAR SI EL DISPOSITIVO ESTÁ ACTIVO (últimos 2 minutos)
+    const ultimoRegistro = new Date(d.created_at).getTime();
+    const ahora = Date.now();
+    const diferenciaMinutos = (ahora - ultimoRegistro) / 60000;
+    
+    if (diferenciaMinutos > 2) {
+      console.log("🔍 [NOTIF] Dispositivo inactivo. No se envían notificaciones.");
+      return;
+    }
+
     console.log("🔍 [NOTIF] Último registro:", {
       id: d.id,
       sensor_1: d.sensor_1,
@@ -80,19 +85,6 @@ async function verificarYNotificar() {
     });
 
     let falla = null;
-
-    // ==================== VERIFICAR SI EL DISPOSITIVO ESTÁ ACTIVO ====================
-    const ultimoRegistro = new Date(d.created_at).getTime();
-    const ahora = Date.now();
-    const diferenciaMinutos = (ahora - ultimoRegistro) / 60000;
-
-    console.log("🔍 [NOTIF] Último registro hace " + diferenciaMinutos.toFixed(1) + " minutos");
-
-    if (diferenciaMinutos > 2) {
-      console.log("🔍 [NOTIF] Dispositivo inactivo. No se envían notificaciones.");
-      return; // Salir de la función sin enviar notificaciones
-    }
-    // ==================== FIN VERIFICACIÓN ====================
 
     // Detectar fallas
     if (!d.estado_ac) {
@@ -119,22 +111,35 @@ async function verificarYNotificar() {
         return;
       }
 
-      console.log("🔍 [NOTIF] Enviando notificación:", falla.mensaje);
-      const enviado = await enviarNotificacionMessenger(config.messenger_apikey, falla.mensaje);
-      
-      // Guardar en tabla notificaciones
-      try {
-        await axios.post(SUPABASE_URL + "notificaciones", {
-          dispositivo_id: d.dispositivo_id,
-          tipo: falla.tipo,
-          mensaje: falla.mensaje,
-          destinatario: 'Messenger',
-          canal: 'messenger',
-          estado: enviado ? 'enviado' : 'fallido'
-        }, { headers });
-        console.log("🔍 [NOTIF] Notificación guardada en Supabase.");
-      } catch (err) {
-        console.error("🔍 [NOTIF] Error guardando notificación:", err.message);
+      // OBTENER TODOS LOS DESTINATARIOS ACTIVOS
+      const destResp = await axios.get(SUPABASE_URL + "destinatarios?activo=eq.true", { headers });
+      const destinatarios = destResp.data;
+
+      if (destinatarios.length === 0) {
+        console.log("🔍 [NOTIF] No hay destinatarios activos. Saliendo.");
+        return;
+      }
+
+      console.log(`🔍 [NOTIF] Enviando a ${destinatarios.length} destinatarios...`);
+
+      // Enviar a cada destinatario
+      for (const dest of destinatarios) {
+        const enviado = await enviarNotificacionMessenger(dest.apikey, falla.mensaje);
+        
+        // Registrar en la tabla notificaciones
+        try {
+          await axios.post(SUPABASE_URL + "notificaciones", {
+            dispositivo_id: d.dispositivo_id,
+            tipo: falla.tipo,
+            mensaje: falla.mensaje,
+            destinatario: dest.nombre,
+            canal: 'messenger',
+            estado: enviado ? 'enviado' : 'fallido'
+          }, { headers });
+          console.log(`🔍 [NOTIF] Notificación registrada para ${dest.nombre}`);
+        } catch (err) {
+          console.error(`🔍 [NOTIF] Error registrando para ${dest.nombre}:`, err.message);
+        }
       }
     } else {
       console.log("🔍 [NOTIF] No se detectaron fallas.");
