@@ -450,6 +450,61 @@ app.post('/api/comando/wifi', async (req, res) => {
     res.status(500).json({ error: "Error al enviar comando WiFi" });
   }
 });
+
+// ==================== RUTAS: DESTINATARIOS ====================
+
+// Obtener todos los destinatarios
+app.get('/api/destinatarios', async (req, res) => {
+  try {
+    const response = await axios.get(SUPABASE_URL + "destinatarios?select=*&order=id.asc", { headers });
+    res.json(response.data);
+  } catch (error) {
+    res.status(500).json({ error: "Error al obtener destinatarios" });
+  }
+});
+
+// Crear un destinatario
+app.post('/api/destinatarios', async (req, res) => {
+  const { nombre, apikey, institucion } = req.body;
+  try {
+    const response = await axios.post(SUPABASE_URL + "destinatarios", {
+      nombre, apikey, institucion, activo: true
+    }, { headers });
+    res.json({ success: true, data: response.data });
+  } catch (error) {
+    res.status(500).json({ error: "Error al crear destinatario", detalle: error.message });
+  }
+});
+
+// Actualizar un destinatario
+app.patch('/api/destinatarios/:id', async (req, res) => {
+  const { id } = req.params;
+  const { nombre, apikey, activo, institucion } = req.body;
+  try {
+    const updateData = {};
+    if (nombre !== undefined) updateData.nombre = nombre;
+    if (apikey !== undefined) updateData.apikey = apikey;
+    if (activo !== undefined) updateData.activo = activo;
+    if (institucion !== undefined) updateData.institucion = institucion;
+
+    await axios.patch(`${SUPABASE_URL}destinatarios?id=eq.${id}`, updateData, { headers });
+    res.json({ success: true });
+  } catch (error) {
+    res.status(500).json({ error: "Error al actualizar destinatario" });
+  }
+});
+
+// Eliminar un destinatario
+app.delete('/api/destinatarios/:id', async (req, res) => {
+  const { id } = req.params;
+  try {
+    await axios.delete(`${SUPABASE_URL}destinatarios?id=eq.${id}`, { headers });
+    res.json({ success: true });
+  } catch (error) {
+    res.status(500).json({ error: "Error al eliminar destinatario" });
+  }
+});
+
 // ==================== INICIAR SERVIDOR ====================
 const PORT = process.env.PORT || 3000;
 
