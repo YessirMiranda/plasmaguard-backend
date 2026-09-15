@@ -81,6 +81,19 @@ async function verificarYNotificar() {
 
     let falla = null;
 
+    // ==================== VERIFICAR SI EL DISPOSITIVO ESTÁ ACTIVO ====================
+    const ultimoRegistro = new Date(d.created_at).getTime();
+    const ahora = Date.now();
+    const diferenciaMinutos = (ahora - ultimoRegistro) / 60000;
+
+    console.log("🔍 [NOTIF] Último registro hace " + diferenciaMinutos.toFixed(1) + " minutos");
+
+    if (diferenciaMinutos > 2) {
+      console.log("🔍 [NOTIF] Dispositivo inactivo. No se envían notificaciones.");
+      return; // Salir de la función sin enviar notificaciones
+    }
+    // ==================== FIN VERIFICACIÓN ====================
+
     // Detectar fallas
     if (!d.estado_ac) {
       falla = { tipo: 'apagon', mensaje: '⚡ APAGÓN detectado en el banco de sangre. El sistema está en modo batería.' };
