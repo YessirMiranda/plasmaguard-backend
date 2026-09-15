@@ -271,13 +271,24 @@ app.get('/api/usuarios', async (req, res) => {
 
 app.post('/api/usuarios', async (req, res) => {
   const { usuario, password, nombre, rol, institucion, celular, correo } = req.body;
+  
+  console.log("📝 [USUARIOS] Intentando crear usuario:", { usuario, nombre, rol, institucion });
+  
   try {
-    await axios.post(SUPABASE_URL + "usuarios", {
+    const response = await axios.post(SUPABASE_URL + "usuarios", {
       usuario, password, nombre, rol, institucion, celular, correo, activo: true
     }, { headers });
-    res.json({ success: true });
+    
+    console.log("✅ [USUARIOS] Usuario creado:", response.data);
+    res.json({ success: true, data: response.data });
   } catch (error) {
-    res.status(500).json({ error: "Error al crear usuario" });
+    console.error("❌ [USUARIOS] Error al crear usuario:", error.message);
+    console.error("❌ [USUARIOS] Detalle:", error.response ? error.response.data : 'Sin detalle');
+    
+    res.status(500).json({ 
+      error: "Error al crear usuario", 
+      detalle: error.response ? error.response.data : error.message 
+    });
   }
 });
 
