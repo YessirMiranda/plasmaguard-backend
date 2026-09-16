@@ -161,47 +161,68 @@ app.get('/api/ultimo', async (req, res) => {
   }
 });
 
-// --- Histórico de temperaturas ---
+// --- Histórico de temperaturas (CON PAGINACIÓN) ---
 app.get('/api/temperaturas', async (req, res) => {
   const { inicio, fin, intervalo } = req.query;
   try {
-    let url = SUPABASE_URL + "registros?select=*&order=created_at.asc";
-    if (inicio) url += `&created_at=gte.${inicio}`;
-    if (fin) url += `&created_at=lte.${fin}`;
-    
-    const response = await axios.get(url, { headers });
-    let datos = response.data;
-    
+    let todosLosDatos = [];
+    let offset = 0;
+    const limit = 1000; // Límite de Supabase por consulta
+    let hayMas = true;
+
+    // Paginación: obtener todos los datos en bloques de 1000
+    while (hayMas) {
+      let url = SUPABASE_URL + `registros?select=*&order=created_at.asc&limit=${limit}&offset=${offset}`;
+      if (inicio) url += `&created_at=gte.${inicio}`;
+      if (fin) url += `&created_at=lte.${fin}`;
+
+      const response = await axios.get(url, { headers });
+      const datos = response.data;
+
+      if (datos.length === 0) {
+        hayMas = false;
+      } else {
+        todosLosDatos = todosLosDatos.concat(datos);
+        offset += limit;
+        
+        // Si devolvió menos de 1000, ya no hay más
+        if (datos.length < limit) {
+          hayMas = false;
+        }
+      }
+    }
+
+    console.log(`📊 [TEMPERATURAS] Total de datos obtenidos: ${todosLosDatos.length}`);
+
+    let datos = todosLosDatos;
+
+    // Filtrar por intervalo
     if (intervalo && intervalo > 0) {
       const filtrados = [];
       const intervalMs = intervalo * 1000;
-  
-      // Ordenar por timestamp
+
       datos.sort((a, b) => new Date(a.created_at) - new Date(b.created_at));
-  
+
       if (datos.length > 0) {
-        // Tomar el primer dato como referencia
         const primerTimestamp = new Date(datos[0].created_at).getTime();
         let siguienteTimestamp = primerTimestamp;
-    
-        // Recorrer los datos
+
         for (let i = 0; i < datos.length; i++) {
           const ts = new Date(datos[i].created_at).getTime();
-      
-          // Si el timestamp es mayor o igual al siguiente bloque
           if (ts >= siguienteTimestamp) {
             filtrados.push(datos[i]);
-            // Calcular el siguiente bloque basado en el timestamp del dato agregado
             siguienteTimestamp = ts + intervalMs;
           }
         }
       }
-  
+
       datos = filtrados;
     }
-    
+
+    console.log(`📊 [TEMPERATURAS] Datos después del filtro: ${datos.length}`);
     res.json(datos);
   } catch (error) {
+    console.error("Error al obtener temperaturas:", error.message);
     res.status(500).json({ error: "Error al obtener temperaturas", detalle: error.message });
   }
 });
