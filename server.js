@@ -174,14 +174,26 @@ app.get('/api/temperaturas', async (req, res) => {
     
     if (intervalo && intervalo > 0) {
       const filtrados = [];
-      let ultimoTimestamp = 0;
-      datos.forEach(d => {
-        const ts = new Date(d.created_at).getTime();
-        if (ts - ultimoTimestamp >= intervalo * 1000) {
-          filtrados.push(d);
-          ultimoTimestamp = ts;
+      const intervalMs = intervalo * 1000;
+  
+      // Ordenar por timestamp (por si acaso)
+      datos.sort((a, b) => new Date(a.created_at) - new Date(b.created_at));
+  
+      if (datos.length > 0) {
+        // Agregar el primer dato
+        filtrados.push(datos[0]);
+        let siguienteTimestamp = new Date(datos[0].created_at).getTime() + intervalMs;
+    
+        // Recorrer los datos y agregar los que cumplan el intervalo
+        for (let i = 1; i < datos.length; i++) {
+          const ts = new Date(datos[i].created_at).getTime();
+          if (ts >= siguienteTimestamp) {
+            filtrados.push(datos[i]);
+            siguienteTimestamp = ts + intervalMs;
+          }
         }
-      });
+      }
+  
       datos = filtrados;
     }
     
