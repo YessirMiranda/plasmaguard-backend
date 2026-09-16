@@ -176,19 +176,22 @@ app.get('/api/temperaturas', async (req, res) => {
       const filtrados = [];
       const intervalMs = intervalo * 1000;
   
-      // Ordenar por timestamp (por si acaso)
+      // Ordenar por timestamp
       datos.sort((a, b) => new Date(a.created_at) - new Date(b.created_at));
   
       if (datos.length > 0) {
-        // Agregar el primer dato
-        filtrados.push(datos[0]);
-        let siguienteTimestamp = new Date(datos[0].created_at).getTime() + intervalMs;
+        // Tomar el primer dato como referencia
+        const primerTimestamp = new Date(datos[0].created_at).getTime();
+        let siguienteTimestamp = primerTimestamp;
     
-        // Recorrer los datos y agregar los que cumplan el intervalo
-        for (let i = 1; i < datos.length; i++) {
+        // Recorrer los datos
+        for (let i = 0; i < datos.length; i++) {
           const ts = new Date(datos[i].created_at).getTime();
+      
+          // Si el timestamp es mayor o igual al siguiente bloque
           if (ts >= siguienteTimestamp) {
             filtrados.push(datos[i]);
+            // Calcular el siguiente bloque basado en el timestamp del dato agregado
             siguienteTimestamp = ts + intervalMs;
           }
         }
