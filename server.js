@@ -1,10 +1,11 @@
 // ============================================
-// PLASMAGUARD - BACKEND (RENDER) - MULTI-SEDE
+// PLASMAGUARD - BACKEND (RENDER) - MULTI-SEDE + AUTH
 // ============================================
 
 const express = require('express');
 const cors = require('cors');
 const axios = require('axios');
+const bcrypt = require('bcryptjs');
 
 const app = express();
 app.use(cors());
@@ -14,7 +15,7 @@ app.use(express.json());
 const SUPABASE_URL = "https://pwfkckrafympdltinjdo.supabase.co/rest/v1/";
 const SUPABASE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InB3Zmtja3JhZnltcGRsdGluamRvIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODg4NzE5ODMsImV4cCI6MjEwNDQ0Nzk4M30.Ys3utjYgkWrQZaJAKQT9v90Yzzv-qQH9HYIJdf8FbCo";
 
-const DISPOSITIVOS = ['POTOSI', 'COCHABAMBA']; // CAMBIO: lista de sedes
+const DISPOSITIVOS = ['POTOSI', 'COCHABAMBA'];
 
 const headers = {
   "apikey": SUPABASE_KEY,
@@ -22,10 +23,8 @@ const headers = {
   "Content-Type": "application/json"
 };
 
-// CAMBIO: cliente axios con timeout para evitar bloqueos
 const axiosClient = axios.create({ timeout: 10000, headers });
 
-// CAMBIO: captura global de errores para no morir por uncaughtException
 process.on('uncaughtException', (err) => {
   console.error('💥 UNCAUGHT EXCEPTION:', err);
 });
@@ -40,7 +39,6 @@ async function enviarNotificacionMessenger(apiKey, mensaje) {
     const apiKeyLimpia = apiKey.trim().replace(/[\s\u200B\u200C\u200D\uFEFF]/g, '');
     const url = `https://api.callmebot.com/facebook/send.php?apikey=${apiKeyLimpia}&text=${encodeURIComponent(mensaje)}`;
     const response = await axiosClient.get(url);
-    console.log("Respuesta de CallMeBot:", response.data);
     return true;
   } catch (error) {
     console.error("Error enviando notificación:", error.message);
@@ -48,21 +46,15 @@ async function enviarNotificacionMessenger(apiKey, mensaje) {
   }
 }
 
-// CAMBIO: verificarYNotificar itera sobre todas las sedes
 async function verificarYNotificar() {
-  console.log("🔍 [NOTIF] Iniciando verificación multi-sede...");
   try {
     const configResp = await axiosClient.get(SUPABASE_URL + "configuracion?select=*");
     const config = {};
     configResp.data.forEach(c => { config[c.clave] = c.valor; });
 
-    if (config.notificaciones_activas !== 'true') {
-      console.log("🔍 [NOTIF] Notificaciones desactivadas. Saliendo.");
-      return;
-    }
+    if (config.notificaciones_activas !== 'true') return;
 
     for (const dispId of DISPOSITIVOS) {
-      console.log(`🔍 [NOTIF] Verificando ${dispId}...`);
       try {
         const resp = await axiosClient.get(
           SUPABASE_URL + `registros?dispositivo_id=eq.${dispId}&select=*&order=id.desc&limit=1`
@@ -70,47 +62,35 @@ async function verificarYNotificar() {
         if (resp.data.length === 0) continue;
         const d = resp.data[0];
 
-        // Verificar que esté activo (últimos 2 min)
         const ultimoRegistro = new Date(d.created_at).getTime();
         const diferenciaMinutos = (Date.now() - ultimoRegistro) / 60000;
-        if (diferenciaMinutos > 2) {
-          console.log(`🔍 [NOTIF] ${dispId} inactivo. Sigo con la siguiente sede.`);
-          continue;
-        }
+        if (diferenciaMinutos > 2) continue;
 
         let falla = null;
         if (!d.estado_ac) {
           falla = { tipo: 'apagon', mensaje: `⚡ APAGÓN en ${dispId}. Sistema en batería.` };
         } else if (d.sensor_1 !== -127 && (d.sensor_1 > parseFloat(config.temp_maxima) || d.sensor_1 < parseFloat(config.temp_minima))) {
-          falla = { tipo: 'temp_alta', mensaje: `🌡️ Temperatura anormal en ${dispId} - Sensor 1: ${d.sensor_1.toFixed(1)}°C` };
+          falla = { tipo: 'temp_alta', mensaje: `🌡️ Temperatura anormal en ${dispId} - S1: ${d.sensor_1.toFixed(1)}°C` };
         } else if (d.sensor_2 !== -127 && (d.sensor_2 > parseFloat(config.temp_maxima) || d.sensor_2 < parseFloat(config.temp_minima))) {
-          falla = { tipo: 'temp_alta', mensaje: `🌡️ Temperatura anormal en ${dispId} - Sensor 2: ${d.sensor_2.toFixed(1)}°C` };
+          falla = { tipo: 'temp_alta', mensaje: `🌡️ Temperatura anormal en ${dispId} - S2: ${d.sensor_2.toFixed(1)}°C` };
         } else if (d.sensor_3 !== -127 && (d.sensor_3 > parseFloat(config.temp_maxima) || d.sensor_3 < parseFloat(config.temp_minima))) {
-          falla = { tipo: 'temp_alta', mensaje: `🌡️ Temperatura anormal en ${dispId} - Sensor 3: ${d.sensor_3.toFixed(1)}°C` };
+          falla = { tipo: 'temp_alta', mensaje: `🌡️ Temperatura anormal en ${dispId} - S3: ${d.sensor_3.toFixed(1)}°C` };
         } else if (d.voltaje_bateria <= parseFloat(config.voltaje_corte)) {
-          falla = { tipo: 'bateria_baja', mensaje: `🔋 Batería baja en ${dispId}. Voltaje: ${d.voltaje_bateria.toFixed(2)}V` };
+          falla = { tipo: 'bateria_baja', mensaje: `🔋 Batería baja en ${dispId}. V: ${d.voltaje_bateria.toFixed(2)}V` };
         }
 
-        if (!falla) {
-          console.log(`🔍 [NOTIF] ${dispId} sin fallas.`);
-          continue;
-        }
+        if (!falla) continue;
 
-        // Anti-duplicados por sede
         const cincoMinAtras = new Date(Date.now() - 5 * 60 * 1000).toISOString();
         const notifResp = await axiosClient.get(
           SUPABASE_URL + `notificaciones?dispositivo_id=eq.${dispId}&tipo=eq.${falla.tipo}&created_at=gte.${cincoMinAtras}`
         );
-        if (notifResp.data.length > 0) {
-          console.log(`🔍 [NOTIF] ${dispId} ya notificó ${falla.tipo} hace <5min. Saltando.`);
-          continue;
-        }
+        if (notifResp.data.length > 0) continue;
 
         const destResp = await axiosClient.get(SUPABASE_URL + "destinatarios?activo=eq.true");
         const destinatarios = destResp.data;
         if (destinatarios.length === 0) continue;
 
-        console.log(`🔍 [NOTIF] Enviando a ${destinatarios.length} destinatarios (${dispId})...`);
         for (const dest of destinatarios) {
           const enviado = await enviarNotificacionMessenger(dest.apikey, falla.mensaje);
           try {
@@ -123,23 +103,59 @@ async function verificarYNotificar() {
               estado: enviado ? 'enviado' : 'fallido'
             });
           } catch (err) {
-            console.error(`🔍 [NOTIF] Error registrando para ${dest.nombre}:`, err.message);
+            console.error(`Error registrando notif: ${err.message}`);
           }
         }
       } catch (err) {
-        console.error(`🔍 [NOTIF] Error procesando ${dispId}:`, err.message);
+        console.error(`Error procesando ${dispId}:`, err.message);
       }
     }
   } catch (error) {
-    console.error("🔍 [NOTIF] Error general:", error.message);
+    console.error("Error general verificarYNotificar:", error.message);
   }
 }
 
 // ==================== RUTAS ====================
 
-// --- Health check (para UptimeRobot) ---
 app.get('/api/health', (req, res) => {
   res.json({ status: 'ok', timestamp: new Date().toISOString(), uptime: process.uptime() });
+});
+
+// --- LOGIN ---
+app.post('/api/login', async (req, res) => {
+  const { usuario, password } = req.body;
+  if (!usuario || !password) {
+    return res.status(400).json({ error: "Faltan usuario o contraseña" });
+  }
+  try {
+    const resp = await axiosClient.get(
+      SUPABASE_URL + `usuarios?usuario=eq.${encodeURIComponent(usuario)}&activo=eq.true&limit=1`
+    );
+    if (resp.data.length === 0) {
+      return res.status(401).json({ error: "Usuario o contraseña incorrectos" });
+    }
+    const u = resp.data[0];
+
+    if (!u.password || (!u.password.startsWith('$2a$') && !u.password.startsWith('$2b$'))) {
+      console.error(`⚠️ Usuario ${u.usuario} tiene password sin hashear. Migrar.`);
+      return res.status(500).json({ error: "Error de configuración de usuario. Contacte al administrador." });
+    }
+
+    const valido = await bcrypt.compare(password, u.password);
+    if (!valido) {
+      return res.status(401).json({ error: "Usuario o contraseña incorrectos" });
+    }
+
+    res.json({
+      usuario: u.usuario,
+      nombre: u.nombre,
+      rol: u.rol,
+      institucion: u.institucion || 'potosi'
+    });
+  } catch (error) {
+    console.error("Error en login:", error.message);
+    res.status(500).json({ error: "Error interno al iniciar sesión" });
+  }
 });
 
 // --- Último registro (por sede o global) ---
@@ -155,7 +171,6 @@ app.get('/api/ultimo', async (req, res) => {
   }
 });
 
-// --- NUEVO: últimos registros de TODAS las sedes ---
 app.get('/api/ultimos', async (req, res) => {
   try {
     const resultado = {};
@@ -171,7 +186,6 @@ app.get('/api/ultimos', async (req, res) => {
   }
 });
 
-// --- Histórico de temperaturas ---
 app.get('/api/temperaturas', async (req, res) => {
   const { inicio, fin, intervalo, dispositivo_id } = req.query;
   try {
@@ -184,7 +198,7 @@ app.get('/api/temperaturas', async (req, res) => {
       let url = SUPABASE_URL + `registros?select=*&order=created_at.asc&limit=${limit}&offset=${offset}`;
       if (inicio) url += `&created_at=gte.${inicio}`;
       if (fin) url += `&created_at=lte.${fin}`;
-      if (dispositivo_id) url += `&dispositivo_id=eq.${dispositivo_id}`; // CAMBIO
+      if (dispositivo_id) url += `&dispositivo_id=eq.${dispositivo_id}`;
       const response = await axiosClient.get(url);
       const datos = response.data;
       if (datos.length === 0) hayMas = false;
@@ -220,14 +234,13 @@ app.get('/api/temperaturas', async (req, res) => {
   }
 });
 
-// --- Histórico de fallas ---
 app.get('/api/fallas', async (req, res) => {
   const { inicio, fin, dispositivo_id } = req.query;
   try {
     let url = SUPABASE_URL + "registros?select=*&order=created_at.asc";
     if (inicio) url += `&created_at=gte.${inicio}`;
     if (fin) url += `&created_at=lte.${fin}`;
-    if (dispositivo_id) url += `&dispositivo_id=eq.${dispositivo_id}`; // CAMBIO
+    if (dispositivo_id) url += `&dispositivo_id=eq.${dispositivo_id}`;
     const response = await axiosClient.get(url);
     const datos = response.data;
 
@@ -262,7 +275,6 @@ app.get('/api/fallas', async (req, res) => {
   }
 });
 
-// --- Enviar comando (ahora recibe dispositivo_id) ---
 app.post('/api/comando', async (req, res) => {
   const { comando, valor, dispositivo_id } = req.body;
   if (!dispositivo_id) return res.status(400).json({ error: "Falta dispositivo_id" });
@@ -279,7 +291,6 @@ app.post('/api/comando', async (req, res) => {
   }
 });
 
-// --- Usuarios ---
 app.get('/api/usuarios', async (req, res) => {
   try {
     const { rol } = req.query;
@@ -294,12 +305,27 @@ app.get('/api/usuarios', async (req, res) => {
 
 app.post('/api/usuarios', async (req, res) => {
   const { usuario, password, nombre, rol, institucion, celular, correo } = req.body;
+
+  if (!usuario || !password || !nombre || !rol) {
+    return res.status(400).json({ error: "Faltan campos obligatorios" });
+  }
+
   try {
-    const response = await axiosClient.post(SUPABASE_URL + "usuarios", {
-      usuario, password, nombre, rol, institucion, celular, correo, activo: true
+    const existe = await axiosClient.get(
+      SUPABASE_URL + `usuarios?usuario=eq.${encodeURIComponent(usuario)}&limit=1`
+    );
+    if (existe.data.length > 0) {
+      return res.status(409).json({ error: "Ya existe un usuario con ese CI" });
+    }
+
+    const hash = await bcrypt.hash(password, 10);
+
+    await axiosClient.post(SUPABASE_URL + "usuarios", {
+      usuario, password: hash, nombre, rol, institucion, celular, correo, activo: true
     });
-    res.json({ success: true, data: response.data });
+    res.json({ success: true, data: { usuario, nombre, rol, institucion } });
   } catch (error) {
+    console.error("Error al crear usuario:", error.message);
     res.status(500).json({
       error: "Error al crear usuario",
       detalle: error.response ? error.response.data : error.message
@@ -316,7 +342,6 @@ app.delete('/api/usuarios/:id', async (req, res) => {
   }
 });
 
-// --- Auditoría ---
 app.get('/api/auditoria', async (req, res) => {
   try {
     const response = await axiosClient.get(SUPABASE_URL + "auditoria?select=*&order=created_at.desc&limit=100");
@@ -352,11 +377,10 @@ app.delete('/api/fallas/borrar', async (req, res) => {
     await axiosClient.delete(`${SUPABASE_URL}registros?created_at=gte.${inicio}&created_at=lte.${fin}`);
     res.json({ success: true, mensaje: `Registros borrados entre ${inicio} y ${fin}` });
   } catch (error) {
-    res.status(500).json({ error: "Error al borrar notificaciones", detalle: error.message });
+    res.status(500).json({ error: "Error al borrar registros", detalle: error.message });
   }
 });
 
-// --- Configuración ---
 app.get('/api/configuracion', async (req, res) => {
   try {
     const response = await axiosClient.get(SUPABASE_URL + "configuracion?select=*");
@@ -428,7 +452,6 @@ app.post('/api/comando/wifi', async (req, res) => {
   }
 });
 
-// ==================== DESTINATARIOS ====================
 app.get('/api/destinatarios', async (req, res) => {
   try {
     const response = await axiosClient.get(SUPABASE_URL + "destinatarios?select=*&order=id.asc");
@@ -474,7 +497,6 @@ app.delete('/api/destinatarios/:id', async (req, res) => {
   }
 });
 
-// ==================== ERROR MIDDLEWARE ====================
 app.use((err, req, res, next) => {
   console.error('💥 ERROR MIDDLEWARE:', err.message);
   res.status(500).json({ error: 'Error interno', detalle: err.message });
@@ -482,7 +504,6 @@ app.use((err, req, res, next) => {
 
 // ==================== INICIAR SERVIDOR ====================
 const PORT = process.env.PORT || 3000;
-console.log("🔍 [NOTIF] Iniciando sistema multi-sede...");
 verificarYNotificar();
 setInterval(verificarYNotificar, 60000);
 app.listen(PORT, () => console.log("Servidor en puerto " + PORT));
