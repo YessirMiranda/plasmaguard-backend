@@ -1,5 +1,5 @@
 // ============================================
-// PLASMAGUARD - BACKEND (RENDER)
+// PLASMAGUARD - BACKEND (RENDER) - MULTI-SEDE
 // ============================================
 
 const express = require('express');
@@ -14,11 +14,24 @@ app.use(express.json());
 const SUPABASE_URL = "https://pwfkckrafympdltinjdo.supabase.co/rest/v1/";
 const SUPABASE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InB3Zmtja3JhZnltcGRsdGluamRvIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODg4NzE5ODMsImV4cCI6MjEwNDQ0Nzk4M30.Ys3utjYgkWrQZaJAKQT9v90Yzzv-qQH9HYIJdf8FbCo";
 
+const DISPOSITIVOS = ['POTOSI', 'COCHABAMBA']; // CAMBIO: lista de sedes
+
 const headers = {
   "apikey": SUPABASE_KEY,
   "Authorization": "Bearer " + SUPABASE_KEY,
   "Content-Type": "application/json"
 };
+
+// CAMBIO: cliente axios con timeout para evitar bloqueos
+const axiosClient = axios.create({ timeout: 10000, headers });
+
+// CAMBIO: captura global de errores para no morir por uncaughtException
+process.on('uncaughtException', (err) => {
+  console.error('💥 UNCAUGHT EXCEPTION:', err);
+});
+process.on('unhandledRejection', (reason) => {
+  console.error('💥 UNHANDLED REJECTION:', reason);
+});
 
 // ==================== FUNCIONES AUXILIARES ====================
 
@@ -26,8 +39,7 @@ async function enviarNotificacionMessenger(apiKey, mensaje) {
   try {
     const apiKeyLimpia = apiKey.trim().replace(/[\s\u200B\u200C\u200D\uFEFF]/g, '');
     const url = `https://api.callmebot.com/facebook/send.php?apikey=${apiKeyLimpia}&text=${encodeURIComponent(mensaje)}`;
-    console.log("URL de notificación:", url);
-    const response = await axios.get(url);
+    const response = await axiosClient.get(url);
     console.log("Respuesta de CallMeBot:", response.data);
     return true;
   } catch (error) {
@@ -36,113 +48,87 @@ async function enviarNotificacionMessenger(apiKey, mensaje) {
   }
 }
 
+// CAMBIO: verificarYNotificar itera sobre todas las sedes
 async function verificarYNotificar() {
-  console.log("🔍 [NOTIF] Iniciando verificación...");
-  
+  console.log("🔍 [NOTIF] Iniciando verificación multi-sede...");
   try {
-    // Leer configuración
-    const configResp = await axios.get(SUPABASE_URL + "configuracion?select=*", { headers });
+    const configResp = await axiosClient.get(SUPABASE_URL + "configuracion?select=*");
     const config = {};
     configResp.data.forEach(c => { config[c.clave] = c.valor; });
-
-    console.log("🔍 [NOTIF] Configuración:", {
-      notificaciones_activas: config.notificaciones_activas,
-      temp_maxima: config.temp_maxima,
-      temp_minima: config.temp_minima,
-      voltaje_corte: config.voltaje_corte
-    });
 
     if (config.notificaciones_activas !== 'true') {
       console.log("🔍 [NOTIF] Notificaciones desactivadas. Saliendo.");
       return;
     }
 
-    // Leer último registro
-    const resp = await axios.get(SUPABASE_URL + "registros?select=*&order=id.desc&limit=1", { headers });
-    if (resp.data.length === 0) {
-      console.log("🔍 [NOTIF] No hay registros. Saliendo.");
-      return;
-    }
+    for (const dispId of DISPOSITIVOS) {
+      console.log(`🔍 [NOTIF] Verificando ${dispId}...`);
+      try {
+        const resp = await axiosClient.get(
+          SUPABASE_URL + `registros?dispositivo_id=eq.${dispId}&select=*&order=id.desc&limit=1`
+        );
+        if (resp.data.length === 0) continue;
+        const d = resp.data[0];
 
-    const d = resp.data[0];
-
-    // VERIFICAR SI EL DISPOSITIVO ESTÁ ACTIVO (últimos 2 minutos)
-    const ultimoRegistro = new Date(d.created_at).getTime();
-    const ahora = Date.now();
-    const diferenciaMinutos = (ahora - ultimoRegistro) / 60000;
-    
-    if (diferenciaMinutos > 2) {
-      console.log("🔍 [NOTIF] Dispositivo inactivo. No se envían notificaciones.");
-      return;
-    }
-
-    console.log("🔍 [NOTIF] Último registro:", {
-      id: d.id,
-      sensor_1: d.sensor_1,
-      sensor_2: d.sensor_2,
-      estado_ac: d.estado_ac,
-      voltaje_bateria: d.voltaje_bateria
-    });
-
-    let falla = null;
-
-    // Detectar fallas
-    if (!d.estado_ac) {
-      falla = { tipo: 'apagon', mensaje: '⚡ APAGÓN detectado en el banco de sangre. El sistema está en modo batería.' };
-      console.log("🔍 [NOTIF] Falla detectada: APAGÓN");
-    } else if (d.sensor_1 !== -127 && (d.sensor_1 > parseFloat(config.temp_maxima) || d.sensor_1 < parseFloat(config.temp_minima))) {
-      falla = { tipo: 'temp_alta', mensaje: `🌡️ ALERTA: Temperatura anormal en Sensor 1: ${d.sensor_1.toFixed(1)}°C` };
-      console.log("🔍 [NOTIF] Falla detectada: TEMP ALTA S1");
-    } else if (d.sensor_2 !== -127 && (d.sensor_2 > parseFloat(config.temp_maxima) || d.sensor_2 < parseFloat(config.temp_minima))) {
-      falla = { tipo: 'temp_alta', mensaje: `🌡️ ALERTA: Temperatura anormal en Sensor 2: ${d.sensor_2.toFixed(1)}°C` };
-      console.log("🔍 [NOTIF] Falla detectada: TEMP ALTA S2");
-    } else if (d.voltaje_bateria <= parseFloat(config.voltaje_corte)) {
-      falla = { tipo: 'bateria_baja', mensaje: `🔋 ALERTA: Batería baja. Voltaje: ${d.voltaje_bateria.toFixed(2)}V` };
-      console.log("🔍 [NOTIF] Falla detectada: BATERÍA BAJA");
-    }
-
-    if (falla) {
-      // Verificar si ya se notificó esta falla en los últimos 5 minutos
-      const cincoMinAtras = new Date(Date.now() - 5 * 60 * 1000).toISOString();
-      const notifResp = await axios.get(SUPABASE_URL + `notificaciones?tipo=eq.${falla.tipo}&created_at=gte.${cincoMinAtras}`, { headers });
-      
-      if (notifResp.data.length > 0) {
-        console.log("🔍 [NOTIF] Ya se notificó esta falla recientemente. Saliendo.");
-        return;
-      }
-
-      // OBTENER TODOS LOS DESTINATARIOS ACTIVOS
-      const destResp = await axios.get(SUPABASE_URL + "destinatarios?activo=eq.true", { headers });
-      const destinatarios = destResp.data;
-
-      if (destinatarios.length === 0) {
-        console.log("🔍 [NOTIF] No hay destinatarios activos. Saliendo.");
-        return;
-      }
-
-      console.log(`🔍 [NOTIF] Enviando a ${destinatarios.length} destinatarios...`);
-
-      // Enviar a cada destinatario
-      for (const dest of destinatarios) {
-        const enviado = await enviarNotificacionMessenger(dest.apikey, falla.mensaje);
-        
-        // Registrar en la tabla notificaciones
-        try {
-          await axios.post(SUPABASE_URL + "notificaciones", {
-            dispositivo_id: d.dispositivo_id,
-            tipo: falla.tipo,
-            mensaje: falla.mensaje,
-            destinatario: dest.nombre,
-            canal: 'messenger',
-            estado: enviado ? 'enviado' : 'fallido'
-          }, { headers });
-          console.log(`🔍 [NOTIF] Notificación registrada para ${dest.nombre}`);
-        } catch (err) {
-          console.error(`🔍 [NOTIF] Error registrando para ${dest.nombre}:`, err.message);
+        // Verificar que esté activo (últimos 2 min)
+        const ultimoRegistro = new Date(d.created_at).getTime();
+        const diferenciaMinutos = (Date.now() - ultimoRegistro) / 60000;
+        if (diferenciaMinutos > 2) {
+          console.log(`🔍 [NOTIF] ${dispId} inactivo. Sigo con la siguiente sede.`);
+          continue;
         }
+
+        let falla = null;
+        if (!d.estado_ac) {
+          falla = { tipo: 'apagon', mensaje: `⚡ APAGÓN en ${dispId}. Sistema en batería.` };
+        } else if (d.sensor_1 !== -127 && (d.sensor_1 > parseFloat(config.temp_maxima) || d.sensor_1 < parseFloat(config.temp_minima))) {
+          falla = { tipo: 'temp_alta', mensaje: `🌡️ Temperatura anormal en ${dispId} - Sensor 1: ${d.sensor_1.toFixed(1)}°C` };
+        } else if (d.sensor_2 !== -127 && (d.sensor_2 > parseFloat(config.temp_maxima) || d.sensor_2 < parseFloat(config.temp_minima))) {
+          falla = { tipo: 'temp_alta', mensaje: `🌡️ Temperatura anormal en ${dispId} - Sensor 2: ${d.sensor_2.toFixed(1)}°C` };
+        } else if (d.sensor_3 !== -127 && (d.sensor_3 > parseFloat(config.temp_maxima) || d.sensor_3 < parseFloat(config.temp_minima))) {
+          falla = { tipo: 'temp_alta', mensaje: `🌡️ Temperatura anormal en ${dispId} - Sensor 3: ${d.sensor_3.toFixed(1)}°C` };
+        } else if (d.voltaje_bateria <= parseFloat(config.voltaje_corte)) {
+          falla = { tipo: 'bateria_baja', mensaje: `🔋 Batería baja en ${dispId}. Voltaje: ${d.voltaje_bateria.toFixed(2)}V` };
+        }
+
+        if (!falla) {
+          console.log(`🔍 [NOTIF] ${dispId} sin fallas.`);
+          continue;
+        }
+
+        // Anti-duplicados por sede
+        const cincoMinAtras = new Date(Date.now() - 5 * 60 * 1000).toISOString();
+        const notifResp = await axiosClient.get(
+          SUPABASE_URL + `notificaciones?dispositivo_id=eq.${dispId}&tipo=eq.${falla.tipo}&created_at=gte.${cincoMinAtras}`
+        );
+        if (notifResp.data.length > 0) {
+          console.log(`🔍 [NOTIF] ${dispId} ya notificó ${falla.tipo} hace <5min. Saltando.`);
+          continue;
+        }
+
+        const destResp = await axiosClient.get(SUPABASE_URL + "destinatarios?activo=eq.true");
+        const destinatarios = destResp.data;
+        if (destinatarios.length === 0) continue;
+
+        console.log(`🔍 [NOTIF] Enviando a ${destinatarios.length} destinatarios (${dispId})...`);
+        for (const dest of destinatarios) {
+          const enviado = await enviarNotificacionMessenger(dest.apikey, falla.mensaje);
+          try {
+            await axiosClient.post(SUPABASE_URL + "notificaciones", {
+              dispositivo_id: dispId,
+              tipo: falla.tipo,
+              mensaje: falla.mensaje,
+              destinatario: dest.nombre,
+              canal: 'messenger',
+              estado: enviado ? 'enviado' : 'fallido'
+            });
+          } catch (err) {
+            console.error(`🔍 [NOTIF] Error registrando para ${dest.nombre}:`, err.message);
+          }
+        }
+      } catch (err) {
+        console.error(`🔍 [NOTIF] Error procesando ${dispId}:`, err.message);
       }
-    } else {
-      console.log("🔍 [NOTIF] No se detectaron fallas.");
     }
   } catch (error) {
     console.error("🔍 [NOTIF] Error general:", error.message);
@@ -151,62 +137,72 @@ async function verificarYNotificar() {
 
 // ==================== RUTAS ====================
 
-// --- Último registro ---
+// --- Health check (para UptimeRobot) ---
+app.get('/api/health', (req, res) => {
+  res.json({ status: 'ok', timestamp: new Date().toISOString(), uptime: process.uptime() });
+});
+
+// --- Último registro (por sede o global) ---
 app.get('/api/ultimo', async (req, res) => {
+  const { dispositivo_id } = req.query;
   try {
-    const response = await axios.get(SUPABASE_URL + "registros?select=*&order=id.desc&limit=1", { headers });
+    let url = SUPABASE_URL + "registros?select=*&order=id.desc&limit=1";
+    if (dispositivo_id) url += `&dispositivo_id=eq.${dispositivo_id}`;
+    const response = await axiosClient.get(url);
     res.json(response.data);
   } catch (error) {
     res.status(500).json({ error: "Error al obtener datos", detalle: error.message });
   }
 });
 
-// --- Histórico de temperaturas (CON PAGINACIÓN) ---
+// --- NUEVO: últimos registros de TODAS las sedes ---
+app.get('/api/ultimos', async (req, res) => {
+  try {
+    const resultado = {};
+    for (const dispId of DISPOSITIVOS) {
+      const r = await axiosClient.get(
+        SUPABASE_URL + `registros?dispositivo_id=eq.${dispId}&select=*&order=id.desc&limit=1`
+      );
+      resultado[dispId] = r.data[0] || null;
+    }
+    res.json(resultado);
+  } catch (error) {
+    res.status(500).json({ error: "Error al obtener últimos", detalle: error.message });
+  }
+});
+
+// --- Histórico de temperaturas ---
 app.get('/api/temperaturas', async (req, res) => {
-  const { inicio, fin, intervalo } = req.query;
+  const { inicio, fin, intervalo, dispositivo_id } = req.query;
   try {
     let todosLosDatos = [];
     let offset = 0;
-    const limit = 1000; // Límite de Supabase por consulta
+    const limit = 1000;
     let hayMas = true;
 
-    // Paginación: obtener todos los datos en bloques de 1000
     while (hayMas) {
       let url = SUPABASE_URL + `registros?select=*&order=created_at.asc&limit=${limit}&offset=${offset}`;
       if (inicio) url += `&created_at=gte.${inicio}`;
       if (fin) url += `&created_at=lte.${fin}`;
-
-      const response = await axios.get(url, { headers });
+      if (dispositivo_id) url += `&dispositivo_id=eq.${dispositivo_id}`; // CAMBIO
+      const response = await axiosClient.get(url);
       const datos = response.data;
-
-      if (datos.length === 0) {
-        hayMas = false;
-      } else {
+      if (datos.length === 0) hayMas = false;
+      else {
         todosLosDatos = todosLosDatos.concat(datos);
         offset += limit;
-        
-        // Si devolvió menos de 1000, ya no hay más
-        if (datos.length < limit) {
-          hayMas = false;
-        }
+        if (datos.length < limit) hayMas = false;
       }
     }
 
-    console.log(`📊 [TEMPERATURAS] Total de datos obtenidos: ${todosLosDatos.length}`);
-
     let datos = todosLosDatos;
-
-    // Filtrar por intervalo
     if (intervalo && intervalo > 0) {
       const filtrados = [];
       const intervalMs = intervalo * 1000;
-
       datos.sort((a, b) => new Date(a.created_at) - new Date(b.created_at));
-
       if (datos.length > 0) {
         const primerTimestamp = new Date(datos[0].created_at).getTime();
         let siguienteTimestamp = primerTimestamp;
-
         for (let i = 0; i < datos.length; i++) {
           const ts = new Date(datos[i].created_at).getTime();
           if (ts >= siguienteTimestamp) {
@@ -215,98 +211,71 @@ app.get('/api/temperaturas', async (req, res) => {
           }
         }
       }
-
       datos = filtrados;
     }
 
-    console.log(`📊 [TEMPERATURAS] Datos después del filtro: ${datos.length}`);
     res.json(datos);
   } catch (error) {
-    console.error("Error al obtener temperaturas:", error.message);
     res.status(500).json({ error: "Error al obtener temperaturas", detalle: error.message });
   }
 });
 
 // --- Histórico de fallas ---
 app.get('/api/fallas', async (req, res) => {
-  const { inicio, fin } = req.query;
+  const { inicio, fin, dispositivo_id } = req.query;
   try {
     let url = SUPABASE_URL + "registros?select=*&order=created_at.asc";
     if (inicio) url += `&created_at=gte.${inicio}`;
     if (fin) url += `&created_at=lte.${fin}`;
-    
-    const response = await axios.get(url, { headers });
+    if (dispositivo_id) url += `&dispositivo_id=eq.${dispositivo_id}`; // CAMBIO
+    const response = await axiosClient.get(url);
     const datos = response.data;
-    
+
     const fallas = [];
     let fallaActual = null;
-    
     datos.forEach(d => {
       let tipoFalla = null;
       let detalle = '';
-      
-      if (d.estado_ac === false) {
-        tipoFalla = 'Apagón';
-        detalle = 'Sin energía eléctrica';
-      } else if (d.sensor_1 !== -127 && (d.sensor_1 > -20 || d.sensor_1 < -40)) {
-        tipoFalla = 'Temperatura';
-        detalle = `Sensor 1: ${d.sensor_1}°C`;
-      } else if (d.sensor_2 !== -127 && (d.sensor_2 > -20 || d.sensor_2 < -40)) {
-        tipoFalla = 'Temperatura';
-        detalle = `Sensor 2: ${d.sensor_2}°C`;
-      } else if (d.sensor_3 !== -127 && (d.sensor_3 > -20 || d.sensor_3 < -40)) {
-        tipoFalla = 'Temperatura';
-        detalle = `Sensor 3: ${d.sensor_3}°C`;
-      }
-      
+      if (d.estado_ac === false) { tipoFalla = 'Apagón'; detalle = 'Sin energía eléctrica'; }
+      else if (d.sensor_1 !== -127 && (d.sensor_1 > -20 || d.sensor_1 < -40)) { tipoFalla = 'Temperatura'; detalle = `Sensor 1: ${d.sensor_1}°C`; }
+      else if (d.sensor_2 !== -127 && (d.sensor_2 > -20 || d.sensor_2 < -40)) { tipoFalla = 'Temperatura'; detalle = `Sensor 2: ${d.sensor_2}°C`; }
+      else if (d.sensor_3 !== -127 && (d.sensor_3 > -20 || d.sensor_3 < -40)) { tipoFalla = 'Temperatura'; detalle = `Sensor 3: ${d.sensor_3}°C`; }
+
       if (tipoFalla) {
         if (!fallaActual || fallaActual.tipo !== tipoFalla) {
           if (fallaActual) fallas.push(fallaActual);
-          fallaActual = {
-            inicio: d.created_at,
-            fin: d.created_at,
-            tipo: tipoFalla,
-            detalle: detalle,
-            duracion: 0
-          };
+          fallaActual = { inicio: d.created_at, fin: d.created_at, tipo: tipoFalla, detalle, duracion: 0, dispositivo_id: d.dispositivo_id };
         } else {
           fallaActual.fin = d.created_at;
         }
       } else {
-        if (fallaActual) {
-          fallas.push(fallaActual);
-          fallaActual = null;
-        }
+        if (fallaActual) { fallas.push(fallaActual); fallaActual = null; }
       }
     });
-    
     if (fallaActual) fallas.push(fallaActual);
-    
     fallas.forEach(f => {
-      const inicio = new Date(f.inicio).getTime();
-      const fin = new Date(f.fin).getTime();
-      f.duracion = Math.round((fin - inicio) / 1000);
+      f.duracion = Math.round((new Date(f.fin).getTime() - new Date(f.inicio).getTime()) / 1000);
     });
-    
     res.json(fallas);
   } catch (error) {
     res.status(500).json({ error: "Error al obtener fallas", detalle: error.message });
   }
 });
 
-// --- Enviar comando ---
+// --- Enviar comando (ahora recibe dispositivo_id) ---
 app.post('/api/comando', async (req, res) => {
-  const { comando, valor } = req.body;
+  const { comando, valor, dispositivo_id } = req.body;
+  if (!dispositivo_id) return res.status(400).json({ error: "Falta dispositivo_id" });
   try {
-    await axios.post(SUPABASE_URL + "comandos", {
-      dispositivo_id: "POTOSI",
-      comando: comando,
+    await axiosClient.post(SUPABASE_URL + "comandos", {
+      dispositivo_id,
+      comando,
       valor: valor || null,
       estado: "pendiente"
-    }, { headers });
+    });
     res.json({ success: true });
   } catch (error) {
-    res.status(500).json({ error: "Error al enviar comando" });
+    res.status(500).json({ error: "Error al enviar comando", detalle: error.message });
   }
 });
 
@@ -314,9 +283,9 @@ app.post('/api/comando', async (req, res) => {
 app.get('/api/usuarios', async (req, res) => {
   try {
     const { rol } = req.query;
-    let url = SUPABASE_URL + "usuarios?select=*";
+    let url = SUPABASE_URL + "usuarios?select=id,usuario,nombre,rol,institucion,celular,correo,activo,created_at";
     if (rol) url += `&rol=eq.${rol}`;
-    const response = await axios.get(url, { headers });
+    const response = await axiosClient.get(url);
     res.json(response.data);
   } catch (error) {
     res.status(500).json({ error: "Error al obtener usuarios" });
@@ -325,31 +294,22 @@ app.get('/api/usuarios', async (req, res) => {
 
 app.post('/api/usuarios', async (req, res) => {
   const { usuario, password, nombre, rol, institucion, celular, correo } = req.body;
-  
-  console.log("📝 [USUARIOS] Intentando crear usuario:", { usuario, nombre, rol, institucion });
-  
   try {
-    const response = await axios.post(SUPABASE_URL + "usuarios", {
+    const response = await axiosClient.post(SUPABASE_URL + "usuarios", {
       usuario, password, nombre, rol, institucion, celular, correo, activo: true
-    }, { headers });
-    
-    console.log("✅ [USUARIOS] Usuario creado:", response.data);
+    });
     res.json({ success: true, data: response.data });
   } catch (error) {
-    console.error("❌ [USUARIOS] Error al crear usuario:", error.message);
-    console.error("❌ [USUARIOS] Detalle:", error.response ? error.response.data : 'Sin detalle');
-    
-    res.status(500).json({ 
-      error: "Error al crear usuario", 
-      detalle: error.response ? error.response.data : error.message 
+    res.status(500).json({
+      error: "Error al crear usuario",
+      detalle: error.response ? error.response.data : error.message
     });
   }
 });
 
 app.delete('/api/usuarios/:id', async (req, res) => {
   try {
-    const { id } = req.params;
-    await axios.delete(`${SUPABASE_URL}usuarios?id=eq.${id}`, { headers });
+    await axiosClient.delete(`${SUPABASE_URL}usuarios?id=eq.${req.params.id}`);
     res.json({ success: true });
   } catch (error) {
     res.status(500).json({ error: "Error al eliminar usuario" });
@@ -359,7 +319,7 @@ app.delete('/api/usuarios/:id', async (req, res) => {
 // --- Auditoría ---
 app.get('/api/auditoria', async (req, res) => {
   try {
-    const response = await axios.get(SUPABASE_URL + "auditoria?select=*&order=created_at.desc&limit=100", { headers });
+    const response = await axiosClient.get(SUPABASE_URL + "auditoria?select=*&order=created_at.desc&limit=100");
     res.json(response.data);
   } catch (error) {
     res.status(500).json({ error: "Error al obtener auditoría" });
@@ -369,38 +329,29 @@ app.get('/api/auditoria', async (req, res) => {
 app.post('/api/auditoria', async (req, res) => {
   const { usuario, accion, detalles } = req.body;
   try {
-    await axios.post(SUPABASE_URL + "auditoria", { usuario, accion, detalles }, { headers });
+    await axiosClient.post(SUPABASE_URL + "auditoria", { usuario, accion, detalles });
     res.json({ success: true });
   } catch (error) {
     res.status(500).json({ error: "Error al guardar auditoría" });
   }
 });
 
-// --- Datos individuales ---
 app.delete('/api/datos/:id', async (req, res) => {
   try {
-    const { id } = req.params;
-    await axios.delete(`${SUPABASE_URL}registros?id=eq.${id}`, { headers });
+    await axiosClient.delete(`${SUPABASE_URL}registros?id=eq.${req.params.id}`);
     res.json({ success: true });
   } catch (error) {
     res.status(500).json({ error: "Error al eliminar dato" });
   }
 });
 
-// --- Borrar fallas por rango ---
 app.delete('/api/fallas/borrar', async (req, res) => {
   const { inicio, fin } = req.query;
-  
-  if (!inicio || !fin) {
-    return res.status(400).json({ error: "Se requieren fechas de inicio y fin" });
-  }
-
+  if (!inicio || !fin) return res.status(400).json({ error: "Se requieren fechas de inicio y fin" });
   try {
-    const url = `${SUPABASE_URL}registros?created_at=gte.${inicio}&created_at=lte.${fin}`;
-    await axios.delete(url, { headers });
+    await axiosClient.delete(`${SUPABASE_URL}registros?created_at=gte.${inicio}&created_at=lte.${fin}`);
     res.json({ success: true, mensaje: `Registros borrados entre ${inicio} y ${fin}` });
   } catch (error) {
-    console.error("Error borrando notificaciones:", error.message);
     res.status(500).json({ error: "Error al borrar notificaciones", detalle: error.message });
   }
 });
@@ -408,7 +359,7 @@ app.delete('/api/fallas/borrar', async (req, res) => {
 // --- Configuración ---
 app.get('/api/configuracion', async (req, res) => {
   try {
-    const response = await axios.get(SUPABASE_URL + "configuracion?select=*", { headers });
+    const response = await axiosClient.get(SUPABASE_URL + "configuracion?select=*");
     res.json(response.data);
   } catch (error) {
     res.status(500).json({ error: "Error al obtener configuración" });
@@ -419,11 +370,11 @@ app.post('/api/configuracion', async (req, res) => {
   try {
     const config = req.body;
     for (const [clave, valor] of Object.entries(config)) {
-      const existe = await axios.get(SUPABASE_URL + `configuracion?clave=eq.${clave}`, { headers });
+      const existe = await axiosClient.get(SUPABASE_URL + `configuracion?clave=eq.${clave}`);
       if (existe.data.length > 0) {
-        await axios.patch(SUPABASE_URL + `configuracion?clave=eq.${clave}`, { valor }, { headers });
+        await axiosClient.patch(SUPABASE_URL + `configuracion?clave=eq.${clave}`, { valor });
       } else {
-        await axios.post(SUPABASE_URL + "configuracion", { clave, valor, descripcion: '' }, { headers });
+        await axiosClient.post(SUPABASE_URL + "configuracion", { clave, valor, descripcion: '' });
       }
     }
     res.json({ success: true });
@@ -432,89 +383,74 @@ app.post('/api/configuracion', async (req, res) => {
   }
 });
 
-// --- Probar notificación ---
 app.post('/api/notificaciones/probar', async (req, res) => {
   try {
-    const configResp = await axios.get(SUPABASE_URL + "configuracion?select=*", { headers });
+    const configResp = await axiosClient.get(SUPABASE_URL + "configuracion?select=*");
     const config = {};
     configResp.data.forEach(c => { config[c.clave] = c.valor; });
-    
-    if (!config.messenger_apikey) {
-      return res.status(400).json({ error: "No hay API Key configurada" });
-    }
-
+    if (!config.messenger_apikey) return res.status(400).json({ error: "No hay API Key configurada" });
     const mensaje = "🧪 PRUEBA DE NOTIFICACIÓN - PlasmaGuard funcionando correctamente.";
     const enviado = await enviarNotificacionMessenger(config.messenger_apikey, mensaje);
-    
-    if (enviado) {
-      res.json({ success: true, mensaje: "Notificación enviada" });
-    } else {
-      res.status(500).json({ error: "Error al enviar notificación" });
-    }
+    if (enviado) res.json({ success: true, mensaje: "Notificación enviada" });
+    else res.status(500).json({ error: "Error al enviar notificación" });
   } catch (error) {
     res.status(500).json({ error: "Error al enviar notificación" });
   }
 });
 
-// --- Configuración auto-borrado ---
 app.post('/api/config/autoborrado', async (req, res) => {
   const { frecuencia, dias } = req.body;
   try {
-    await axios.post(SUPABASE_URL + "configuracion", {
+    await axiosClient.post(SUPABASE_URL + "configuracion", {
       clave: 'autoborrado',
       valor: JSON.stringify({ frecuencia, dias })
-    }, { headers });
+    });
     res.json({ success: true });
   } catch (error) {
     res.status(500).json({ error: "Error al guardar configuración" });
   }
 });
 
-// --- Cambiar WiFi ---
 app.post('/api/comando/wifi', async (req, res) => {
-  const { ssid1, pass1, ssid2, pass2 } = req.body;
+  const { ssid1, pass1, ssid2, pass2, dispositivo_id } = req.body;
+  if (!dispositivo_id) return res.status(400).json({ error: "Falta dispositivo_id" });
   try {
     const valor = `${ssid1},${pass1},${ssid2 || ''},${pass2 || ''}`;
-    await axios.post(SUPABASE_URL + "comandos", {
-      dispositivo_id: "POTOSI",
+    await axiosClient.post(SUPABASE_URL + "comandos", {
+      dispositivo_id,
       comando: "set_wifi",
-      valor: valor,
+      valor,
       estado: "pendiente"
-    }, { headers });
+    });
     res.json({ success: true });
   } catch (error) {
-    res.status(500).json({ error: "Error al enviar comando WiFi" });
+    res.status(500).json({ error: "Error al enviar comando WiFi", detalle: error.message });
   }
 });
 
-// ==================== RUTAS: DESTINATARIOS ====================
-
-// Obtener todos los destinatarios
+// ==================== DESTINATARIOS ====================
 app.get('/api/destinatarios', async (req, res) => {
   try {
-    const response = await axios.get(SUPABASE_URL + "destinatarios?select=*&order=id.asc", { headers });
+    const response = await axiosClient.get(SUPABASE_URL + "destinatarios?select=*&order=id.asc");
     res.json(response.data);
   } catch (error) {
     res.status(500).json({ error: "Error al obtener destinatarios" });
   }
 });
 
-// Crear un destinatario
 app.post('/api/destinatarios', async (req, res) => {
   const { nombre, apikey, institucion } = req.body;
   try {
-    const response = await axios.post(SUPABASE_URL + "destinatarios", {
+    const response = await axiosClient.post(SUPABASE_URL + "destinatarios", {
       nombre, apikey, institucion, activo: true
-    }, { headers });
+    });
     res.json({ success: true, data: response.data });
   } catch (error) {
     res.status(500).json({ error: "Error al crear destinatario", detalle: error.message });
   }
 });
 
-// Actualizar un destinatario
 app.patch('/api/destinatarios/:id', async (req, res) => {
-  const { id } = req.params;
   const { nombre, apikey, activo, institucion } = req.body;
   try {
     const updateData = {};
@@ -522,36 +458,31 @@ app.patch('/api/destinatarios/:id', async (req, res) => {
     if (apikey !== undefined) updateData.apikey = apikey;
     if (activo !== undefined) updateData.activo = activo;
     if (institucion !== undefined) updateData.institucion = institucion;
-
-    await axios.patch(`${SUPABASE_URL}destinatarios?id=eq.${id}`, updateData, { headers });
+    await axiosClient.patch(`${SUPABASE_URL}destinatarios?id=eq.${req.params.id}`, updateData);
     res.json({ success: true });
   } catch (error) {
     res.status(500).json({ error: "Error al actualizar destinatario" });
   }
 });
 
-// Eliminar un destinatario
 app.delete('/api/destinatarios/:id', async (req, res) => {
-  const { id } = req.params;
   try {
-    await axios.delete(`${SUPABASE_URL}destinatarios?id=eq.${id}`, { headers });
+    await axiosClient.delete(`${SUPABASE_URL}destinatarios?id=eq.${req.params.id}`);
     res.json({ success: true });
   } catch (error) {
     res.status(500).json({ error: "Error al eliminar destinatario" });
   }
 });
 
+// ==================== ERROR MIDDLEWARE ====================
+app.use((err, req, res, next) => {
+  console.error('💥 ERROR MIDDLEWARE:', err.message);
+  res.status(500).json({ error: 'Error interno', detalle: err.message });
+});
+
 // ==================== INICIAR SERVIDOR ====================
 const PORT = process.env.PORT || 3000;
-
-// Ejecutar inmediatamente al iniciar
-console.log("🔍 [NOTIF] Iniciando sistema de notificaciones...");
+console.log("🔍 [NOTIF] Iniciando sistema multi-sede...");
 verificarYNotificar();
-
-// Luego cada 60 segundos
-setInterval(() => {
-  console.log("🔍 [NOTIF] Ejecutando verificación periódica...");
-  verificarYNotificar();
-}, 60000);
-
+setInterval(verificarYNotificar, 60000);
 app.listen(PORT, () => console.log("Servidor en puerto " + PORT));
